@@ -14,7 +14,7 @@ OBJS = $(SRCS:.cpp=.o)
 DEPS = $(SRCS:.cpp=.d)
 
 xrfd :  $(OBJS)
-	g++ $(CPPFLAGS) -o sgs $(OBJS) -lconfig++ -pthread
+	g++ $(CPPFLAGS) -o xrfd $(OBJS) -lrt -ldb -pthread
 
 %.o : %.cpp
 	g++ $(CPPFLAGS) -MMD -MD -c $< -o $@

@@ -27,7 +27,7 @@
 //#include <errno.h>
 //#include <sys/stat.h>
 //#include <sys/types.h>
-//#include <netinet/in.h>
+#include <netinet/in.h>
 //#include <netdb.h>
 //#include <time.h>
 //#include "GitVersion.h"
@@ -35,7 +35,7 @@
 #include <regex.h>
 
 //#include <unistd.h>
-//#include <sys/socket.h>
+#include <sys/socket.h>
 //#include <sys/ioctl.h>
 //#include <arpa/inet.h>
 
@@ -43,6 +43,7 @@
 #include <string>
 #include <map>
 #include <set>
+#include <atomic>
 //#include <utility>
 
 #include <pthread.h>
@@ -131,6 +132,7 @@ public:
 	void Stop();
 	regex_t preg;
 private:
+	static std::atomic<bool> keep_running;
 	short TIMEOUT = 60;
 	short pwunlock = 0;
 	time_t unlocktime;
@@ -226,7 +228,6 @@ private:
 	char an_rcd_streamid[32];
 	time_t check_rcd_time = 0;
 
-	bool keep_running = true;
 	u_int16_t streamid_raw = 0;
 
 	// The reflector uses these functions only
@@ -244,11 +245,11 @@ private:
 	int  read_config(char *);
 	int  srv_open();
 	int  cmd_open();
-	void sigCatch(int signum);
 	int  open_users(char *filename);
 	int  open_blocks(char *filename);
 	bool resolve_rmt(char *name, int type, struct sockaddr_in *addr);
-	void playback(void *arg);
+	void playback(struct rcd *);
+	static void sigCatch(int signum);
 
 	// dvap, dongles
 	void send_heartbeat();

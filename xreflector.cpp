@@ -26,19 +26,18 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <netinet/in.h>
 #include <netdb.h>
 #include <time.h>
 #include <regex.h>
 #include <unistd.h>
-#include <sys/socket.h>
 #include <sys/ioctl.h>
 #include <arpa/inet.h>
-#include <pthread.h>
+#include <future>
 
-//#include <utility>
 
 #include "xreflector.h"
+
+std::atomic<bool> CXReflector::keep_running(true);
 
 bool CXReflector::resolve_rmt(char *name, int type, struct sockaddr_in *addr)
 {
@@ -113,12 +112,8 @@ int CXReflector::link_to_ref(char *call)
 	/* IP-port */
 	char search_value[MAXHOSTNAMELEN + 7];
 
-	inbound_type::iterator inbound_pos;
-	inbound *inbound_ptr;
-	pair<inbound_type::iterator,bool> inbound_insert_pair;
 	struct sockaddr_in sin;
 	unsigned char queryCommand[56];
-	unsigned short j;
 
 	char local_mod = ' ';
 	char ref[CALL_SIZE + 1];
@@ -179,9 +174,9 @@ int CXReflector::link_to_ref(char *call)
 	/* Is it already linked? */
 	sprintf(search_value, "%s-20001", payload);
 
-	inbound_pos = inbound_list.find(search_value);
+	auto inbound_pos = inbound_list.find(search_value);
 	if (inbound_pos != inbound_list.end()) {
-		inbound_ptr = (inbound *)inbound_pos->second;
+		inbound *inbound_ptr = (inbound *)inbound_pos->second;
 		if (!inbound_ptr->is_ref) {
 			printf("This connection is not a reflector\n");
 			return -1;
@@ -225,9 +220,7 @@ int CXReflector::link_to_ref(char *call)
 			refbuf[2] = 24;
 			refbuf[3] = 0;
 			refbuf[4] = 0;
-			sendto(ref_sock,(char *)refbuf,5,0,
-				   (struct sockaddr *)&(inbound_ptr->sin),
-				   sizeof(struct sockaddr_in));
+			sendto(ref_sock,(char *)refbuf,5,0, (struct sockaddr *)&(inbound_ptr->sin), sizeof(struct sockaddr_in));
 
 			free(inbound_pos->second);
 			inbound_pos->second = NULL;
@@ -252,7 +245,7 @@ int CXReflector::link_to_ref(char *call)
 	sin.sin_port = htons(20001);
 
 	/* assume that we will be ok */
-	inbound_ptr = (inbound *)malloc(sizeof(inbound));
+	inbound *inbound_ptr = (inbound *)malloc(sizeof(inbound));
 	if (inbound_ptr) {
 		inbound_ptr->countdown = TIMEOUT;
 		memcpy((char *)&(inbound_ptr->sin),(char *)&sin, sizeof(struct sockaddr_in));
@@ -275,10 +268,9 @@ int CXReflector::link_to_ref(char *call)
 
 		strcpy(inbound_ptr->serial, "REF     ");
 
-		inbound_insert_pair = inbound_list.insert(pair<string, inbound *>(search_value, inbound_ptr));
+		auto inbound_insert_pair = inbound_list.insert(std::pair<std::string, inbound *>(search_value, inbound_ptr));
 		if (inbound_insert_pair.second) {
-			printf("new CALL=%s,REPEATER,ip=%s, users=%ld\n",
-				   inbound_ptr->call,search_value,inbound_list.size() + a_user_list.size());
+			printf("new CALL=%s,REPEATER,ip=%s, users=%ld\n", inbound_ptr->call,search_value,inbound_list.size() + a_user_list.size());
 
 			/* request to connect */
 			queryCommand[0] = 5;
@@ -286,10 +278,8 @@ int CXReflector::link_to_ref(char *call)
 			queryCommand[2] = 24;
 			queryCommand[3] = 0;
 			queryCommand[4] = 1;
-			for (j = 0; j < 2; j++)
-				sendto(ref_sock,(char *)queryCommand,5,0,
-					   (struct sockaddr *)&(inbound_ptr->sin),
-					   sizeof(struct sockaddr_in));
+			for (int j = 0; j < 2; j++)
+				sendto(ref_sock,(char *)queryCommand, 5, 0, (struct sockaddr *)&(inbound_ptr->sin), sizeof(struct sockaddr_in));
 
 			print_links_file();
 		} else {
@@ -308,21 +298,16 @@ int CXReflector::link_to_ref(char *call)
 // send keepalive to dvap, dongles
 void CXReflector::send_heartbeat()
 {
-	inbound_type::iterator pos;
-	inbound_type::iterator temp_pos = inbound_list.end();
-	inbound *inbound_ptr;
-	blocks_type::iterator block_pos;
+	auto temp_pos = inbound_list.end();
 	char dropped = ' ';
 
-	for (pos = inbound_list.begin(); pos != inbound_list.end(); pos++) {
-		inbound_ptr = (inbound *)pos->second;
+	for (auto pos = inbound_list.begin(); pos != inbound_list.end(); pos++) {
+		inbound *inbound_ptr = (inbound *)pos->second;
 
-		block_pos = blocks.find(inbound_ptr->call);
+		auto block_pos = blocks.find(inbound_ptr->call);
 
 		if (block_pos == blocks.end()) { /* not blocked */
-			sendto(ref_sock,(char *)REF_ACK,3,0,
-				   (struct sockaddr *)&(inbound_ptr->sin),
-				   sizeof(struct sockaddr_in));
+			sendto(ref_sock,(char *)REF_ACK, 3, 0, (struct sockaddr *)&(inbound_ptr->sin), sizeof(struct sockaddr_in));
 
 			if (inbound_ptr->countdown >= 0)
 				inbound_ptr->countdown --;
@@ -339,12 +324,9 @@ void CXReflector::send_heartbeat()
 	}
 
 	if (temp_pos != inbound_list.end()) {
-		inbound_ptr = (inbound *)temp_pos->second;
+		inbound *inbound_ptr = (inbound *)temp_pos->second;
 
-		printf("call=%s %s, removing %s\n",
-			   inbound_ptr->call,
-			   (dropped == 't')?"timeout":"blocked",
-			   temp_pos->first.c_str());
+		printf("call=%s %s, removing %s\n", inbound_ptr->call, (dropped == 't')?"timeout":"blocked", temp_pos->first.c_str());
 
 		if (dropped == 'b') {
 			/* disconnect */
@@ -353,9 +335,7 @@ void CXReflector::send_heartbeat()
 			refbuf[2] = 24;
 			refbuf[3] = 0;
 			refbuf[4] = 0;
-			sendto(ref_sock,(char *)refbuf,5,0,
-				   (struct sockaddr *)&(inbound_ptr->sin),
-				   sizeof(struct sockaddr_in));
+			sendto(ref_sock,(char *)refbuf, 5, 0, (struct sockaddr *)&(inbound_ptr->sin), sizeof(struct sockaddr_in));
 		}
 
 		free(temp_pos->second);
@@ -368,42 +348,34 @@ void CXReflector::send_heartbeat()
 
 int CXReflector::open_blocks(char *filename)
 {
-	FILE *fp = NULL;
-	char inbuf[512];
-	char *p = NULL;
-	blocks_type::iterator pos;
-	short int i;
-
-	char *call_ptr;
-	char call[9];
-	const char *delim = " \t";
-
-	fp = fopen(filename, "r");
+	FILE *fp = fopen(filename, "r");
 	if (!fp) {
 		printf("Failed to open file %s\n", filename);
 		return 1;
 	}
-
 	blocks.clear();
 
 	printf("Reading from file: [%s]\n", filename);
+	char inbuf[512];
 	while (fgets(inbuf, 511, fp) != NULL) {
 		inbuf[511] = '\0';
-		p = strchr(inbuf, '\r');
+		char *p = strchr(inbuf, '\r');
 		if (p)
 			*p = '\0';
 		p = strchr(inbuf, '\n');
 		if (p)
 			*p = '\0';
 
-		call_ptr = strtok(inbuf, delim);
+		const char *delim = " \t";
+		char *call_ptr = strtok(inbuf, delim);
 		if (call_ptr) {
+			char call[9];
 			if (strlen(call_ptr) <= 8) {
 				memset(call, ' ', 9);
 				call[8] = '\0';
 				memcpy(call, call_ptr, strlen(call_ptr));
 
-				for (i = 0; i < CALL_SIZE; i++) {
+				for (int i=0; i<CALL_SIZE; i++) {
 					if (call[i] == '_')
 						call[i] = ' ';
 				}
@@ -415,7 +387,7 @@ int CXReflector::open_blocks(char *filename)
 	fclose(fp);
 
 	printf("BEGIN listing blocked callsigns...%ld calls blocked\n", blocks.size());
-	for (pos = blocks.begin(); pos != blocks.end(); pos++)
+	for (auto pos = blocks.begin(); pos != blocks.end(); pos++)
 		printf("--->[%s]\n", pos->c_str());
 	printf("END listing blocked callsigns\n");
 
@@ -424,17 +396,7 @@ int CXReflector::open_blocks(char *filename)
 
 int CXReflector::open_users(char *filename)
 {
-	FILE *fp = NULL;
-	char inbuf[512];
-	char *p = NULL;
-
-	char *gwy_ptr;
-	char gwy[9];
-	char *host_ptr;
-	const char *delim = " \t";
-	call_ip_type::iterator pos;
-
-	fp = fopen(filename, "r");
+	FILE *fp = fopen(filename, "r");
 	if (!fp) {
 		printf("Failed to open file %s\n", filename);
 		return 1;
@@ -443,20 +405,23 @@ int CXReflector::open_users(char *filename)
 	call_ip_map.clear();
 
 	printf("Reading from file: [%s]\n", filename);
+	char inbuf[512];
 	while (fgets(inbuf, 511, fp) != NULL) {
 		inbuf[511] = '\0';
-		p = strchr(inbuf, '\r');
+		char *p = strchr(inbuf, '\r');
 		if (p)
 			*p = '\0';
 		p = strchr(inbuf, '\n');
 		if (p)
 			*p = '\0';
 
-		gwy_ptr = strtok(inbuf, delim);
-		host_ptr = strtok(NULL, delim);
+		const char *delim = " \t";
+		char *gwy_ptr = strtok(inbuf, delim);
+		char *host_ptr = strtok(NULL, delim);
 
 		if (gwy_ptr && host_ptr) {
 			if (strlen(gwy_ptr) <= 8) {
+				char gwy[9];
 				memset(gwy, ' ', 9);
 				gwy[8] = '\0';
 				memcpy(gwy, gwy_ptr, strlen(gwy_ptr));
@@ -466,7 +431,7 @@ int CXReflector::open_users(char *filename)
 	}
 	fclose(fp);
 
-	for (pos = call_ip_map.begin(); pos != call_ip_map.end(); pos++)
+	for (auto pos = call_ip_map.begin(); pos != call_ip_map.end(); pos++)
 		printf("[%s],[%s]\n", pos->first.c_str(), pos->second.c_str());
 	printf("Loaded %ld entries\n", call_ip_map.size());
 
@@ -476,21 +441,16 @@ int CXReflector::open_users(char *filename)
 /* Search for that host */
 bool CXReflector::get_ip(char *call, char *ip)
 {
-	bool ok = false;
-	call_ip_type::iterator pos;
-
-	struct sockaddr_in a_net_addr;
-
-	pos = call_ip_map.find(call);
+	auto pos = call_ip_map.find(call);
 	if (pos == call_ip_map.end()) {
 		printf("Callsign [%s] not found in database\n", call);
 		return false;  // not found
 	}
 
-	ok = resolve_rmt((char *)pos->second.c_str(), SOCK_DGRAM, &(a_net_addr));
-	if (!ok) {
-		printf("Failed to resolve [%s] for callsign [%s]\n",
-			   pos->second.c_str(), call);
+	struct sockaddr_in a_net_addr;
+	bool ok = resolve_rmt((char *)pos->second.c_str(), SOCK_DGRAM, &(a_net_addr));
+	if (! ok) {
+		printf("Failed to resolve [%s] for callsign [%s]\n", pos->second.c_str(), call);
 		return false;
 	}
 
@@ -503,32 +463,26 @@ bool CXReflector::get_ip(char *call, char *ip)
 // Process the configuration file
 int CXReflector::read_config(char *cfgFile)
 {
-	short int valid_params = 11;
-	short int params = 0;
+	const int valid_params = 11;
+	int params = 0;
 
-	FILE *cnf = NULL;
-	char inbuf[1024];
-	char *p;
-	char *ptr = NULL;
-	unsigned short int i;
-	unsigned short int j;
-
-	cnf = fopen(cfgFile, "r");
+	FILE *cnf = fopen(cfgFile, "r");
 	if (!cnf) {
 		printf("Failed to open file %s\n", cfgFile);
 		return 1;
 	}
-	printf("Starting dxrfd v3.08a-w1bsb (GitID #%.7s)\n", gitversion);
-	printf("dxrfd comes with ABSOLUTELY NO WARRANTY; see the LICENSE for details.\n");
+	printf("Starting xrfd v%s\n", VERSION);
+	printf("xrfd comes with ABSOLUTELY NO WARRANTY; see the LICENSE for details.\n");
 	printf("This is free software, and you are welcome to distribute it\n");
 	printf("under certain conditions that are discussed in the LICENSE file.\n");
 
 	printf("Reading file %s\n", cfgFile);
+	char inbuf[1024];
 	while (fgets(inbuf, 1020, cnf) != NULL) {
 		if (strchr(inbuf, '#'))
 			continue;
 
-		p = strchr(inbuf, '\r');
+		char *p = strchr(inbuf, '\r');
 		if (p)
 			*p = '\0';
 		p = strchr(inbuf, '\n');
@@ -544,24 +498,23 @@ int CXReflector::read_config(char *cfgFile)
 			memset(OWNER,' ', sizeof(OWNER));
 			OWNER[OWNER_SIZE] = '\0';
 
-			ptr = strchr(p + 1, ' ');
+			char *ptr = strchr(p + 1, ' ');
 			if (ptr)
 				*ptr = '\0';
 
 			if (strlen(p + 1) != OWNER_SIZE - 2)
-				printf("OWNER value %s invalid, length must be exactly %d\n",
-					   p + 1, OWNER_SIZE - 2);
+				printf("OWNER value %s invalid, length must be exactly %d\n", p + 1, OWNER_SIZE - 2);
 			else {
 				memcpy(OWNER, p + 1, OWNER_SIZE - 2);
 
-				for (i = 0; i < strlen(OWNER); i++)
+				for (unsigned int i=0; i<strlen(OWNER); i++)
 					OWNER[i] = toupper(OWNER[i]);
 
-				if ((memcmp(OWNER, "XRF", 3) != 0))
+				if (0!=memcmp(OWNER, "XRF", 3) || !isdigit(OWNER[3]) || !isdigit(OWNER[4]) || !isdigit(OWNER[5]))
 					printf("Reflector names must be XRFzzz where zzz are digits from 1 thru 9, and A-Z.\n");
 				else {
 					printf("OWNER=%s\n",OWNER);
-					params ++;
+					params++;
 				}
 			}
 		} else if (strcmp(inbuf,"ADMIN") == 0) {
@@ -582,15 +535,15 @@ int CXReflector::read_config(char *cfgFile)
 					memcpy(ADMIN, p + 1, strlen(p + 1));
 
 					/* uppercase it */
-					for (j = 0; j < CALL_SIZE; j++)
+					for (int j=0; j<CALL_SIZE; j++)
 						ADMIN[j] = toupper(ADMIN[j]);
 
 					printf("ADMIN=[%s]\n",ADMIN);
-					params ++;
+					params++;
 				}
 			}
 		} else if (strcmp(inbuf,"LISTEN_IP") == 0) {
-			ptr = strchr(p + 1, ' ');
+			char *ptr = strchr(p + 1, ' ');
 			if (ptr)
 				*ptr = '\0';
 
@@ -600,52 +553,52 @@ int CXReflector::read_config(char *cfgFile)
 				memset(LISTEN_IP, '\0', sizeof(LISTEN_IP));
 				strncpy(LISTEN_IP, p + 1, IP_SIZE);
 				printf("LISTEN_IP=%s\n",LISTEN_IP);
-				params ++;
+				params++;
 			}
 		} else if (strcmp(inbuf,"LISTEN_PORT") == 0) {
 			LISTEN_PORT = atoi(p + 1);
 			printf("LISTEN_PORT=%d\n",LISTEN_PORT);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"COMMAND_PORT") == 0) {
 			COMMAND_PORT = atoi(p + 1);
 			printf("COMMAND_PORT=%d\n",COMMAND_PORT);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"MAX_USERS") == 0) {
 			MAX_USERS = atoi(p + 1);
 			printf("MAX_USERS=%d\n",MAX_USERS);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"MAX_OTHER_USERS") == 0) {
 			MAX_OTHER_USERS = atoi(p + 1);
 			printf("MAX_OTHER_USERS=%d\n",MAX_OTHER_USERS);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"STATUS_FILE") == 0) {
 			memset(STATUS_FILE, '\0', sizeof(STATUS_FILE));
 			strncpy(STATUS_FILE, p + 1,FILENAME_MAX);
 			printf("STATUS_FILE=%s\n",STATUS_FILE);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"USERS") == 0) {
 			memset(USERS, '\0', sizeof(USERS));
 			strncpy(USERS, p + 1, FILENAME_MAX);
 			printf("USERS=%s\n",USERS);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"BLOCKS") == 0) {
 			memset(BLOCKS, '\0', sizeof(BLOCKS));
 			strncpy(BLOCKS, p + 1, FILENAME_MAX);
 			printf("BLOCKS=%s\n",BLOCKS);
-			params ++;
+			params++;
 		} else if (strcmp(inbuf,"QSO_DETAILS") == 0) {
 			if (*(p + 1) == 'Y')
 				QSO_DETAILS = true;
 			else
 				QSO_DETAILS = false;
 			printf("QSO_DETAILS=%c\n", *(p + 1));
-			params ++;
+			params++;
 		}
 	}
 	fclose(cnf);
 
 	if (params != valid_params) {
-		printf("Configuration file %s invalid\n",cfgFile);
+		printf("Configuration file %s invalid\n", cfgFile);
 		return 1;
 	}
 
@@ -659,24 +612,19 @@ int CXReflector::read_config(char *cfgFile)
 // Send heartbeat to repeaters
 void CXReflector::check_heartbeat()
 {
-	a_user_list_type::iterator pos;
-	a_user_list_type::iterator temp_pos = a_user_list.end();
-	struct a_user *a_user_ptr;
-	blocks_type::iterator block_pos;
+	auto temp_pos = a_user_list.end();
 	char dropped = ' ';
 
-	for (pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-		a_user_ptr = (struct a_user *)pos->second;
+	for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
+		struct a_user *a_user_ptr = (struct a_user *)pos->second;
 
-		block_pos = blocks.find(a_user_ptr->call);
+		auto block_pos = blocks.find(a_user_ptr->call);
 
 		if (block_pos == blocks.end()) { /* not blocked */
-			sendto(srv_sock, OWNER, strlen(OWNER) + 1,
-				   0,(struct sockaddr *)&(a_user_ptr->sin),
-				   sizeof(struct sockaddr_in));
+			sendto(srv_sock, OWNER, strlen(OWNER) + 1, 0, (struct sockaddr *)&(a_user_ptr->sin), sizeof(struct sockaddr_in));
 
 			if (a_user_ptr->countdown >= 0)
-				a_user_ptr->countdown --;
+				a_user_ptr->countdown--;
 
 			if (a_user_ptr->countdown < 0) {
 				dropped = 't'; // timeout
@@ -689,7 +637,7 @@ void CXReflector::check_heartbeat()
 	}
 
 	if (temp_pos != a_user_list.end()) {
-		a_user_ptr = (struct a_user *)temp_pos->second;
+		struct a_user *a_user_ptr = (struct a_user *)temp_pos->second;
 
 		printf("call=%s %s, removing %s\n", a_user_ptr->call, (dropped == 't')?"timeout":"blocked", temp_pos->first.c_str());
 
@@ -699,7 +647,6 @@ void CXReflector::check_heartbeat()
 
 		print_links_file();
 	}
-
 	return;
 }
 
@@ -712,35 +659,27 @@ void CXReflector::print_version()
 }
 
 /* Print connected users */
-static void print_users()
+void CXReflector::print_users()
 {
 	struct tm tm;
 
 	char buf[256];
 	for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-		a_user_ptr = (struct a_user *)pos->second;
+		struct a_user *a_user_ptr = (struct a_user *)pos->second;
 		localtime_r(&(a_user_ptr->connect_time),&tm);
 		snprintf(buf, 255, "%s,%s,REPEATER,%02d%02d%02d,%02d:%02d:%02d,%s\n",
-				 a_user_ptr->call,
-				 pos->first.c_str(),
-				 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
-				 tm.tm_hour,tm.tm_min,tm.tm_sec,
-				 a_user_ptr->isMute?"Muted":"notMuted");
+				 a_user_ptr->call, pos->first.c_str(), tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
+				 tm.tm_hour,tm.tm_min,tm.tm_sec, a_user_ptr->isMute ? "Muted" : "notMuted");
 
 		sendto(cmd_sock, buf, strlen(buf), 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 	}
 
 	for (auto pos2 = inbound_list.begin(); pos2 != inbound_list.end(); pos2++) {
-		inbound_ptr = (inbound *)pos2->second;
+		inbound *inbound_ptr = (inbound *)pos2->second;
 		localtime_r(&(inbound_ptr->connect_time),&tm);
 		snprintf(buf, 255, "%s,%s,%s(%.8s),%02d%02d%02d,%02d:%02d:%02d,%s\n",
-				 inbound_ptr->call,
-				 pos2->first.c_str(),
-				 inbound_ptr->is_ref?"REPEATER":"DONGLE",
-				 inbound_ptr->serial,
-				 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
-				 tm.tm_hour,tm.tm_min,tm.tm_sec,
-				 inbound_ptr->isMute?"Muted":"notMuted");
+				 inbound_ptr->call, pos2->first.c_str(), inbound_ptr->is_ref?"REPEATER":"DONGLE", inbound_ptr->serial,
+				 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100, tm.tm_hour,tm.tm_min,tm.tm_sec, inbound_ptr->isMute?"Muted":"notMuted");
 
 		sendto(cmd_sock, buf, strlen(buf), 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 	}
@@ -748,15 +687,15 @@ static void print_users()
 }
 
 /* Mute or unmute all users */
-static void mute_users(bool mute)
+void CXReflector::mute_users(bool mute)
 {
 	for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-		a_user_ptr = (struct a_user *)pos->second;
+		struct a_user *a_user_ptr = (struct a_user *)pos->second;
 		a_user_ptr->isMute = mute;
 	}
 
 	for (auto pos2 = inbound_list.begin(); pos2 != inbound_list.end(); pos2++) {
-		inbound_ptr = (inbound *)pos2->second;
+		inbound *inbound_ptr = (inbound *)pos2->second;
 		inbound_ptr->isMute = mute;
 	}
 	return;
@@ -764,11 +703,11 @@ static void mute_users(bool mute)
 
 
 /* mute or unmute a user by callsign */
-static bool mute_call(char *call, bool mute)
+bool CXReflector::mute_call(char *call, bool mute)
 {
 	bool found = false;
 	for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-		a_user_ptr = (struct a_user *)pos->second;
+		struct a_user *a_user_ptr = (struct a_user *)pos->second;
 		if (strcmp(a_user_ptr->call, call) == 0) {
 			found = true;
 			a_user_ptr->isMute = mute;
@@ -776,7 +715,7 @@ static bool mute_call(char *call, bool mute)
 	}
 
 	for (auto pos2 = inbound_list.begin(); pos2 != inbound_list.end(); pos2++) {
-		inbound_ptr = (inbound *)pos2->second;
+		inbound *inbound_ptr = (inbound *)pos2->second;
 		if (strcmp(inbound_ptr->call, call) == 0) {
 			found = true;
 			inbound_ptr->isMute = mute;
@@ -792,16 +731,12 @@ void CXReflector::print_links_screen()
 	char buf[256];
 	struct tm tm;
 
-	inbound *inbound_ptr;
-
-	struct a_user *a_user_ptr;
-	short int i, j;
 	char from_mod = ' ';
 
 	for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-		a_user_ptr = (struct a_user *)pos->second;
-		for (i = 0; i < 5; i++) {
-			for (j = 0; j < 4; j++) {
+		struct a_user *a_user_ptr = (struct a_user *)pos->second;
+		for (int i=0; i<5; i++) {
+			for (int j=0; j<4; j++) {
 				if (a_user_ptr->rpt_mods[i][j] != '\0') {
 					if (i == 0)
 						from_mod = 'A';
@@ -816,12 +751,8 @@ void CXReflector::print_links_screen()
 
 					localtime_r(&(a_user_ptr->link_time[i][j]),&tm);
 					snprintf(buf, 255, "%c,%s,%c,%s,%02d%02d%02d,%02d:%02d:%02d\n",
-							 from_mod,
-							 a_user_ptr->call,
-							 a_user_ptr->rpt_mods[i][j],
-							 pos->first.c_str(),
-							 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
-							 tm.tm_hour,tm.tm_min,tm.tm_sec);
+							 from_mod, a_user_ptr->call, a_user_ptr->rpt_mods[i][j], pos->first.c_str(),
+							 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100, tm.tm_hour,tm.tm_min,tm.tm_sec);
 
 					sendto(cmd_sock, buf, strlen(buf), 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 				}
@@ -830,8 +761,8 @@ void CXReflector::print_links_screen()
 	}
 
 	for (auto inbound_pos = inbound_list.begin(); inbound_pos != inbound_list.end(); inbound_pos++) {
-		inbound_ptr = (inbound *)inbound_pos->second;
-		for (i = 0; i < 5; i++) {
+		inbound *inbound_ptr = (inbound *)inbound_pos->second;
+		for (int i=0; i<5; i++) {
 			if (inbound_ptr->links[i] != ' ') {
 				if (i == 0)
 					from_mod = 'A';
@@ -846,12 +777,8 @@ void CXReflector::print_links_screen()
 
 				localtime_r(&(inbound_ptr->connect_time), &tm);
 				snprintf(buf, 255, "%c,%s,%c,%s,%02d%02d%02d,%02d:%02d:%02d\n",
-						 from_mod,
-						 inbound_ptr->call,
-						 inbound_ptr->links[i],
-						 inbound_pos->first.c_str(),
-						 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
-						 tm.tm_hour,tm.tm_min,tm.tm_sec);
+						 from_mod, inbound_ptr->call, inbound_ptr->links[i], inbound_pos->first.c_str(),
+						 tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100, tm.tm_hour,tm.tm_min,tm.tm_sec);
 
 				sendto(cmd_sock, buf, strlen(buf), 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 			}
@@ -862,11 +789,7 @@ void CXReflector::print_links_screen()
 /* Print links into the STATUS file */
 void CXReflector::print_links_file()
 {
-	inbound *inbound_ptr;
-
-	struct a_user *a_user_ptr;
 	struct tm tm;
-	short int i, j;
 	char from_mod = ' ';
 
 	statusfp = fopen(STATUS_FILE, "w");
@@ -875,9 +798,9 @@ void CXReflector::print_links_file()
 	else {
 		setvbuf(statusfp, (char *)NULL, _IOLBF, 0);
 		for (auto pos = a_user_list.begin(); pos != a_user_list.end(); pos++) {
-			a_user_ptr = (struct a_user *)pos->second;
-			for (i = 0; i < 5; i++) {
-				for (j = 0; j < 4; j++) {
+			struct a_user *a_user_ptr = (struct a_user *)pos->second;
+			for (int i=0; i<5; i++) {
+				for (int j=0; j<4; j++) {
 					if (a_user_ptr->rpt_mods[i][j] != '\0') {
 						if (i == 0)
 							from_mod = 'A';
@@ -892,20 +815,16 @@ void CXReflector::print_links_file()
 
 						localtime_r(&(a_user_ptr->link_time[i][j]),&tm);
 						fprintf(statusfp, "%c,%s,%c,%s,%02d%02d%02d,%02d:%02d:%02d\n",
-								from_mod,
-								a_user_ptr->call,
-								a_user_ptr->rpt_mods[i][j],
-								pos->first.c_str(),
-								tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100,
-								tm.tm_hour,tm.tm_min,tm.tm_sec);
+								from_mod, a_user_ptr->call, a_user_ptr->rpt_mods[i][j], pos->first.c_str(),
+								tm.tm_mon+1,tm.tm_mday,tm.tm_year % 100, tm.tm_hour,tm.tm_min,tm.tm_sec);
 					}
 				}
 			}
 		}
 
 		for (auto inbound_pos = inbound_list.begin(); inbound_pos != inbound_list.end(); inbound_pos++) {
-			inbound_ptr = (inbound *)inbound_pos->second;
-			for (i = 0; i < 5; i++) {
+			inbound *inbound_ptr = (inbound *)inbound_pos->second;
+			for (int i=0; i<5; i++) {
 				if (inbound_ptr->links[i] != ' ') {
 					if (i == 0)
 						from_mod = 'A';
@@ -979,7 +898,7 @@ int CXReflector::ref_open()
 }
 
 // Open server socket for connected stations
-static int CXReflector::srv_open()
+int CXReflector::srv_open()
 {
 	struct sockaddr_in sin;
 
@@ -1034,27 +953,18 @@ int CXReflector::cmd_open()
 // Process the shell command
 void CXReflector::handle_cmd(char *buf)
 {
-	char *p = NULL;
+	const char *passwd = "C8nt_Fig8";
 	char call[CALL_SIZE + 1];
 	char cmd[4];
 	char cmdprompt[3];
 	unsigned short i;
 	char nak[8];
-	char const *timeoutmsg = "TIMEOUT\n";
-	time_t timenow;
-	double time_since_unlock = 0;
 
-	char *ptr_cmd = NULL;
-	char *ptr_call = NULL;
 	const char *delim = " ";
-
-	blocks_type::iterator pos;
-
-	int rc = -1;
 
 	nak[0] = '\0';
 
-	p = strchr(buf, '\r');
+	char *p = strchr(buf, '\r');
 	if (p)
 		*p = '\0';
 
@@ -1065,45 +975,45 @@ void CXReflector::handle_cmd(char *buf)
 	if (strlen(buf) < 2)
 		return;
 
+	time_t timenow;
 	time(&timenow);  /* Re-lock command processor 60 sec after password entered */
-	time_since_unlock = difftime(timenow,unlocktime);
+	double time_since_unlock = difftime(timenow,unlocktime);
 	if (time_since_unlock > 60 && pwunlock) {
 		pwunlock = 0;
-		sendto(cmd_sock,timeoutmsg,9,
-			   0, (struct sockaddr *)&fromCmd,
-			   sizeof(struct sockaddr_in));
+		char const *timeoutmsg = "TIMEOUT\n";
+		sendto(cmd_sock, timeoutmsg, 9, 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 	}
 
 	printf("Received command [%s] from [%s]\n", buf, inet_ntoa(fromCmd.sin_addr));
 
-	if (strcmp(buf, "lk") == 0) { /* lock command processor */
+	if (strcmp(buf, "lk") == 0) {					/* lock command processor */
 		pwunlock = 0;
 		strcpy(nak,"*");
-	} else if (strcmp(buf, "sh") == 0 && pwunlock) /* shutdown reflector */
+	} else if (strcmp(buf, "sh") == 0 && pwunlock)	/* shutdown reflector */
 		keep_running = false;
-	else if (strcmp(buf, "mu") == 0 && pwunlock) /* mute users */
+	else if (strcmp(buf, "mu") == 0 && pwunlock)	/* mute users */
 		mute_users(true);
-	else if (strcmp(buf, "uu") == 0 && pwunlock) /* un-mute users */
+	else if (strcmp(buf, "uu") == 0 && pwunlock)	/* un-mute users */
 		mute_users(false);
-	else if (strcmp(buf, "qsoy") == 0 && pwunlock)  /* QSO_DETAILS yes */
+	else if (strcmp(buf, "qsoy") == 0 && pwunlock)	/* QSO_DETAILS yes */
 		QSO_DETAILS = true;
-	else if (strcmp(buf, "qson") == 0 && pwunlock)
-		QSO_DETAILS = false;       /* QSO_DETAILS no */
-	else if (strcmp(buf, "pu") == 0)   /* print users */
+	else if (strcmp(buf, "qson") == 0 && pwunlock)	/* QSO_DETAILS no */
+		QSO_DETAILS = false;
+	else if (strcmp(buf, "pu") == 0)				/* print users */
 		print_users();
-	else if (strcmp(buf, "pv") == 0)   /* print version */
+	else if (strcmp(buf, "pv") == 0)				/* print version */
 		print_version();
-	else if (strcmp(buf, "pb") == 0 && pwunlock)   /* print blocked users */
+	else if (strcmp(buf, "pb") == 0 && pwunlock)	/* print blocked users */
 		print_blocks();
-	else if (strcmp(buf, "pl") == 0)   /* print links */
+	else if (strcmp(buf, "pl") == 0)				/* print links */
 		print_links_screen();
-	else if (strcmp(buf, "upd") == 0 && pwunlock) { /* reload the database */
-		rc = open_users(USERS);
+	else if (strcmp(buf, "upd") == 0 && pwunlock) {	/* reload the database */
+		int rc = open_users(USERS);
 		if (rc != 0)
 			printf("Failed to reload %s\n", USERS);
 	} else {
-		ptr_cmd = strtok(buf, delim);
-		ptr_call = strtok(NULL, delim);
+		char *ptr_cmd = strtok(buf, delim);
+		char *ptr_call = strtok(NULL, delim);
 
 		if (!ptr_cmd || !ptr_call) {
 			printf("Missing command parameters\n");
@@ -1127,7 +1037,7 @@ void CXReflector::handle_cmd(char *buf)
 				}
 
 				if (strcmp(cmd, "ab") == 0 && pwunlock) { /* ab <CALLSIGN>    this will block the callsign */
-					pos = blocks.find(call);
+					auto pos = blocks.find(call);
 					if (pos != blocks.end()) {
 						printf("Call %s already blocked\n", call);
 						strcpy(nak, "NAK   \n");
@@ -1151,11 +1061,11 @@ void CXReflector::handle_cmd(char *buf)
 					if (!mute_call(call, false))
 						strcpy(nak, "NAK   \n");
 				} else if (strcmp(cmd, "lrf") == 0 && pwunlock) { /* link to ref */
-					rc = link_to_ref(call);
+					int rc = link_to_ref(call);
 					if (rc != 0)
 						strcpy(nak, "NAK   \n");
 				} else if (strcmp(cmd, "ul") == 0) { /* unlock command processor for commands */
-					if (strncmp(call,passwd,strlen(passwd)) == 0) {
+					if (strncmp(call, passwd, strlen(passwd)) == 0) {
 						pwunlock = 1;
 						time(&unlocktime);
 					}
@@ -1178,7 +1088,7 @@ void CXReflector::handle_cmd(char *buf)
 	if (!pwunlock && nak[2] != '-')
 		strcpy(nak, "LOCKED\n");
 
-	sendto(cmd_sock,nak,7, 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
+	sendto(cmd_sock,nak, 7, 0, (struct sockaddr *)&fromCmd, sizeof(struct sockaddr_in));
 
 	if(pwunlock) {
 		strcpy(cmdprompt,"$ ");
@@ -1191,45 +1101,21 @@ void CXReflector::handle_cmd(char *buf)
 /* Reflector is running here */
 void CXReflector::Run()
 {
-	short i,j,k,n;
-	int recvlen;
-	int recvlen2;
-	int recvlen3;
-	socklen_t fromlen;
-	char *p = NULL;
-	int call_valid = REG_NOERROR;
-
-	bool allowed_to_connect = true;
-	//bool deleted = false;
 	char search_value[MAXHOSTNAMELEN + 7];
 
 	char a_call[CALL_SIZE + 1];
 	char a_call2[CALL_SIZE + 1];
 	char an_ip[IP_SIZE + 1];
 	char a_port[7];
-
-	call_ip_type::iterator pos;
-
-	struct a_user *a_user_ptr;
-	struct a_user *a_user_ptr2;
-	pair<a_user_list_type::iterator,bool> user_insert_pair;
-
-	inbound *inbound_ptr;
-	inbound *inbound_ptr2;
-	pair<inbound_type::iterator,bool> inbound_insert_pair;
-	bool found = false;
-
 	char source_mod = ' ';
-	int max_nfds = 0;
 
 	char tmp1[CALL_SIZE + 1];
 	char tmp2[32]; // 8 for rpt1 + 24 for time_t in string format
 
-	int rc;
-
 	char reply_to_xrf[11];
 
 	/* faster select */
+	int max_nfds = 0;
 	if (srv_sock > max_nfds)
 		max_nfds = srv_sock;
 	if (cmd_sock > max_nfds)
@@ -1292,8 +1178,8 @@ void CXReflector::Run()
 
 		/* process shell commands */
 		if (FD_ISSET(cmd_sock, &fdset)) {
-			fromlen = sizeof(struct sockaddr_in);
-			recvlen2 = recvfrom(cmd_sock, (char *)readBuffer, READBUFFER_SIZE, 0, (struct sockaddr *)&fromCmd,&fromlen);
+			socklen_t fromlen = sizeof(struct sockaddr_in);
+			int recvlen2 = recvfrom(cmd_sock, (char *)readBuffer, READBUFFER_SIZE, 0, (struct sockaddr *)&fromCmd,&fromlen);
 			if (recvlen2 > 0) {
 				readBuffer[recvlen2 - 1] = '\0';
 				handle_cmd((char *)readBuffer);
@@ -1304,10 +1190,10 @@ void CXReflector::Run()
 
 		/*  process input from dvap, dvtool */
 		if (FD_ISSET(ref_sock, &fdset)) {
-			fromlen = sizeof(struct sockaddr_in);
-			recvlen3 = recvfrom(ref_sock,(char *)refbuf, READBUFFER_SIZE, 0, (struct sockaddr *)&fromInbound,&fromlen);
+			socklen_t fromlen = sizeof(struct sockaddr_in);
+			int recvlen3 = recvfrom(ref_sock,(char *)refbuf, READBUFFER_SIZE, 0, (struct sockaddr *)&fromInbound, &fromlen);
 
-			strncpy(an_ip, inet_ntoa(fromInbound addr),IP_SIZE);
+			strncpy(an_ip, inet_ntoa(fromInbound.sin_addr),IP_SIZE);
 			an_ip[IP_SIZE] = '\0';
 			snprintf(a_port, 6, "%d", ntohs(fromInbound.sin_port));
 			a_port[5] = '\0';
@@ -1335,7 +1221,7 @@ void CXReflector::Run()
 
 						/* start at position 10 to bypass the header */
 						strcpy((char *)refbuf + 10 + (24 * j_idx), r_dt_lh_pos->second.c_str());
-						p = strchr((char *)r_dt_lh_pos->first.c_str(), '=');
+						char *p = strchr((char *)r_dt_lh_pos->first.c_str(), '=');
 						if (p) {
 							memcpy((char *)refbuf + 18 + (24 * j_idx), p + 1, 8);
 							*p = '\0';
@@ -1403,16 +1289,16 @@ void CXReflector::Run()
 						refbuf[2] = 5;
 						refbuf[3] = 1;
 
-						total =  a_user_list.size();
+						total = a_user_list.size();
 						memcpy(tmp, (char *)&total, 2);
 						refbuf[6] = tmp[0];
 						refbuf[7] = tmp[1];
 
-						for (auto user_pos = a_user_list.begin(), i_idx = 0; user_pos != a_user_list.end();  user_pos++, i_idx++) {
+						for (auto user_pos = a_user_list.begin(); user_pos != a_user_list.end();  user_pos++, i_idx++) {
 							/* each entry has 20 bytes */
-							a_user_ptr = (struct a_user *)user_pos->second;
+							struct a_user *a_user_ptr = (struct a_user *)user_pos->second;
 							for (module_idx = 0; module_idx < 5; module_idx++) {
-								for (k = 0; k < 4; k++) {
+								for (int k=0; k<4; k++) {
 									if (a_user_ptr->rpt_mods[module_idx][k] != '\0') {
 										if (module_idx == 0)
 											refbuf[8 + (20 * j_idx)] = 'A';
@@ -1482,7 +1368,7 @@ void CXReflector::Run()
 						i_idx = 0;
 						j_idx = 0;
 						k_idx = 0;
-						for (auto inbound_pos = inbound_list.begin(), i_idx = 0; inbound_pos != inbound_list.end();  inbound_pos++, i_idx++) {
+						for (auto inbound_pos = inbound_list.begin(); inbound_pos != inbound_list.end();  inbound_pos++, i_idx++) {
 							/* each entry has 20 bytes */
 							inbound *inbound_ptr = (inbound *)inbound_pos->second;
 							if (inbound_ptr->is_ref) {
@@ -1710,7 +1596,7 @@ void CXReflector::Run()
 								refbuf[3] = 0;
 
 								memcpy(refbuf + 4, ADMIN, CALL_SIZE);
-								for (j = 11; j > 3; j--) {
+								for (int j=11; j>3; j--) {
 									if (refbuf[j] == ' ')
 										refbuf[j] = '\0';
 									else
@@ -1738,7 +1624,7 @@ void CXReflector::Run()
 							// verify callsign
 							memcpy(a_call, refbuf + 4, CALL_SIZE);
 							a_call[CALL_SIZE] = '\0';
-							for (i = 7; i > 0; i--) {
+							for (int i=7; i>0; i--) {
 								if (a_call[i] == '\0')
 									a_call[i] = ' ';
 								else
@@ -1750,7 +1636,7 @@ void CXReflector::Run()
 
 							strcpy(a_call2, a_call);
 							a_call2[7] = ' ';
-							call_valid = regexec(&preg, a_call, 0, NULL, 0);
+							int call_valid = regexec(&preg, a_call, 0, NULL, 0);
 							if ((call_valid != REG_NOERROR) ||
 									(blocks.find(a_call2) != blocks.end()) ||     /* BLOCKED a_call */
 									(memcmp(a_call, OWNER, OWNER_SIZE) == 0)) {  /* a_call can NOT be our reflector */
@@ -1790,7 +1676,7 @@ void CXReflector::Run()
 										inbound_ptr->serial[8] = '\0';
 
 										sprintf(search_value, "%s-%s", an_ip, a_port);
-										inbound_insert_pair = inbound_list.insert(pair<string, inbound *>(search_value, inbound_ptr));
+										auto inbound_insert_pair = inbound_list.insert(std::pair<std::string, inbound *>(search_value, inbound_ptr));
 										if (inbound_insert_pair.second) {
 											if (memcmp(inbound_ptr->call, "1NFO", 4) != 0)
 												printf("new CALL=%s,DONGLE,ip=%s-%s, DV=%.8s, users=%ld\n", inbound_ptr->call,an_ip, a_port, refbuf + 20, inbound_list.size() + a_user_list.size());
@@ -1839,9 +1725,10 @@ void CXReflector::Run()
 									(memcmp(refbuf + 2, "DSVT", 4) == 0) &&
 									((refbuf[6] == 0x10) || (refbuf[6] == 0x20)) &&
 									(refbuf[10] == 0x20)) {
-							found = false;
+							bool found = false;
 
 							sprintf(search_value, "%s-%s", an_ip, a_port);
+							inbound *inbound_ptr = NULL;
 							auto inbound_pos = inbound_list.find(search_value);
 							if (inbound_pos != inbound_list.end()) {
 								inbound *inbound_ptr = (inbound *)inbound_pos->second;
@@ -1855,7 +1742,7 @@ void CXReflector::Run()
 									memcpy(a_call, refbuf + 44, CALL_SIZE);
 									a_call[CALL_SIZE] = '\0';
 
-									call_valid = regexec(&preg, a_call, 0, NULL, 0);
+									int call_valid = regexec(&preg, a_call, 0, NULL, 0);
 									if (call_valid != REG_NOERROR) {
 										printf("User callsign [%s] not valid, audio from [%s] will not be transmitted\n", a_call, search_value);
 										found = false;
@@ -1917,7 +1804,7 @@ void CXReflector::Run()
 									source_mod = ' ';
 
 									if (inbound_ptr->is_ref) {
-										for (i = 0; i < 5; i++) {
+										for (int i=0; i<5; i++) {
 											/* if the remote module matches */
 											if ((inbound_ptr->links[i] == refbuf[27]) &&
 													(refbuf[27] != ' ')) {
@@ -1946,7 +1833,7 @@ void CXReflector::Run()
 																memcpy(an_rcd->data[0], refbuf, recvlen3);
 																an_rcd->recvlen = recvlen3;
 																an_rcd->idx = 1;
-																rcd_insert_pair = rcd_list.insert(pair<string, struct rcd *>(an_rcd_streamid, an_rcd));
+																auto rcd_insert_pair = rcd_list.insert(std::pair<std::string, struct rcd *>(an_rcd_streamid, an_rcd));
 																if (rcd_insert_pair.second)
 																	; // printf("Started recording for user %.8s, streamid=%d,%d\n", refbuf + 44, refbuf[14], refbuf[15]);
 																else {
@@ -1969,7 +1856,7 @@ void CXReflector::Run()
 												tmp1[8] = '\0';
 
 												// delete the user if exists
-												for (dt_lh_pos = dt_lh_list.begin(); dt_lh_pos != dt_lh_list.end();  dt_lh_pos++) {
+												for (auto dt_lh_pos = dt_lh_list.begin(); dt_lh_pos != dt_lh_list.end();  dt_lh_pos++) {
 													if (strcmp((char *)dt_lh_pos->second.c_str(), tmp1) == 0) {
 														dt_lh_list.erase(dt_lh_pos);
 														break;
@@ -1977,7 +1864,7 @@ void CXReflector::Run()
 												}
 												/* Limit?, delete oldest user */
 												if (dt_lh_list.size() == LH_MAX_SIZE) {
-													dt_lh_pos = dt_lh_list.begin();
+													auto dt_lh_pos = dt_lh_list.begin();
 													dt_lh_list.erase(dt_lh_pos);
 												}
 												/* add user */
@@ -1987,6 +1874,7 @@ void CXReflector::Run()
 
 												if (rcd_list.find(an_rcd_streamid) == rcd_list.end()) {
 													/*************** REPLACEMENT to send_a_pkt_to_all **************************************/
+													int k = -1;
 													/* send header to repeaters */
 													if (refbuf[27] == 'A')
 														k = 0;
@@ -1996,8 +1884,6 @@ void CXReflector::Run()
 														k = 2;
 													else if (refbuf[27] == 'D')
 														k = 3;
-													else
-														k = -1;
 
 													if (k >= 0) {
 														temp_x[k].old_sid[0] = refbuf[14];
@@ -2014,8 +1900,8 @@ void CXReflector::Run()
 
 														temp_x[k].s_addr = fromInbound.sin_addr.s_addr;
 
-														for (user_pos = a_user_list.begin(); user_pos != a_user_list.end(); user_pos++) {
-															a_user_ptr = (struct a_user *)user_pos->second;
+														for (auto user_pos = a_user_list.begin(); user_pos != a_user_list.end(); user_pos++) {
+															struct a_user *a_user_ptr = (struct a_user *)user_pos->second;
 
 															if ((a_user_ptr->rpt_mods[k][0] != '\0') ||
 																	(a_user_ptr->rpt_mods[k][1] != '\0') ||
@@ -2044,7 +1930,7 @@ void CXReflector::Run()
 														memcpy(an_rcd->data[0], refbuf, recvlen3);
 														an_rcd->recvlen = recvlen3;
 														an_rcd->idx = 1;
-														rcd_insert_pair = rcd_list.insert(pair<string, struct rcd *>(an_rcd_streamid, an_rcd));
+														auto rcd_insert_pair = rcd_list.insert(std::pair<std::string, struct rcd *>(an_rcd_streamid, an_rcd));
 														if (rcd_insert_pair.second)
 															; // printf("Started recording for user %.8s, streamid=%d,%d\n", refbuf + 44, refbuf[14],refbuf[15]);
 														else {
@@ -2075,7 +1961,7 @@ void CXReflector::Run()
 										}
 										/* Limit?, delete oldest user */
 										if (dt_lh_list.size() == LH_MAX_SIZE) {
-											dt_lh_pos = dt_lh_list.begin();
+											auto dt_lh_pos = dt_lh_list.begin();
 											dt_lh_list.erase(dt_lh_pos);
 										}
 										time(&tNow);
@@ -2085,6 +1971,7 @@ void CXReflector::Run()
 										if (rcd_list.find(an_rcd_streamid) == rcd_list.end()) {
 											/********************** REPLACEMENT to send_a_pkt_to_all ***********************************************/
 											/* send header to repeaters */
+											int k = -1;
 											if (refbuf[27] == 'A')
 												k = 0;
 											else if (refbuf[27] == 'B')
@@ -2093,8 +1980,6 @@ void CXReflector::Run()
 												k = 2;
 											else if (refbuf[27] == 'D')
 												k = 3;
-											else
-												k = -1;
 
 											if (k >= 0) {
 												temp_x[k].old_sid[0] = refbuf[14];
@@ -2111,8 +1996,8 @@ void CXReflector::Run()
 
 												temp_x[k].s_addr = fromInbound.sin_addr.s_addr;
 
-												for (user_pos = a_user_list.begin(); user_pos != a_user_list.end(); user_pos++) {
-													a_user_ptr = (struct a_user *)user_pos->second;
+												for (auto user_pos = a_user_list.begin(); user_pos != a_user_list.end(); user_pos++) {
+													struct a_user *a_user_ptr = (struct a_user *)user_pos->second;
 
 													if ((a_user_ptr->rpt_mods[k][0] != '\0') ||
 															(a_user_ptr->rpt_mods[k][1] != '\0') ||
@@ -2138,16 +2023,15 @@ void CXReflector::Run()
 
 											// start playback
 											an_rcd->locked = true;
-											pthread_attr_init(&attr);
-											pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-											rc = pthread_create(&playback_thread,&attr,playback,(void *)rcd_pos->second);
-											if (rc != 0) {
+											try {
+												std::async(std::launch::async, &CXReflector::playback, this, an_rcd);
+											} catch (const std::exception &e) {
 												printf("Failed to start the playback thread for streamid=%d,%d\n", refbuf[14], refbuf[15]);
+												printf("Exception: %s\n", e.what());
 												free(rcd_pos->second);
 												rcd_pos->second = NULL;
 												rcd_list.erase(rcd_pos);
 											}
-											pthread_attr_destroy(&attr);
 										}
 									} else {
 										/******************************* REPLACEMENT to send_a_pkt_to_all **********************************/
@@ -2157,7 +2041,7 @@ void CXReflector::Run()
 											/* source must NOT be a reflector */
 											if (!(inbound_ptr->is_ref)) {
 												if ((refbuf[26] == 0x55) && (refbuf[27] == 0x2d) && (refbuf[28] == 0x16)) {
-													for (k = 0; k < 4; k++) {
+													for (int k=0; k<4; k++) {
 														if ((refbuf[14] == temp_x[k].old_sid[0]) &&
 																(refbuf[15] == temp_x[k].old_sid[1]) &&
 																(fromInbound.sin_addr.s_addr == temp_x[k].s_addr) &&
@@ -2172,7 +2056,7 @@ void CXReflector::Run()
 												}
 											}
 
-											for (k = 0; k < 4; k++) {
+											for (int k=0; k<4; k++) {
 												if ((refbuf[14] == temp_x[k].old_sid[0]) &&
 														(refbuf[15] == temp_x[k].old_sid[1]) &&
 														(fromInbound.sin_addr.s_addr == temp_x[k].s_addr) &&
@@ -2195,8 +2079,8 @@ void CXReflector::Run()
 
 								/* At this point, if this is a header, it contains our reflector info */
 								/* save the header for re-transmit */
+								int i = -1;
 								if (recvlen3 == 58) {
-									i = -1;
 									if (source_mod == 'A')
 										i = 0;
 									else if (source_mod == 'B')
@@ -2241,7 +2125,7 @@ void CXReflector::Run()
 											} else {
 												if ((refbuf[26] == 0x55) && (refbuf[27] == 0x2d) && (refbuf[28] == 0x16)) {
 													if ((!inbound_ptr2->is_ref) && (!inbound_ptr->is_ref)) {
-														for (i = 0; i < 4; i++) {
+														for (i=0; i<4; i++) {
 															if ((refbuf[14] == temp_r[i].hdr[14]) &&
 																	(refbuf[15] == temp_r[i].hdr[15]) &&
 																	(fromInbound.sin_addr.s_addr == temp_r[i].s_addr)) {
@@ -2258,7 +2142,7 @@ void CXReflector::Run()
 												else {
 													/* treat the remote reflector with resepct */
 													/* send it only if the module matches */
-													for (i = 0; i < 4; i++) {
+													for (i=0; i<4; i++) {
 														if ((refbuf[14] == temp_r[i].hdr[14]) && (refbuf[15] == temp_r[i].hdr[15]) &&
 																(fromInbound.sin_addr.s_addr == temp_r[i].s_addr) &&
 																(inbound_ptr2->links[i] != ' ')) {
@@ -2278,12 +2162,12 @@ void CXReflector::Run()
 
 		/* process input from repeaters */
 		if (FD_ISSET(srv_sock, &fdset)) {
-			fromlen = sizeof(struct sockaddr_in);
-			recvlen = recvfrom(srv_sock,(char *)readBuffer,READBUFFER_SIZE, 0,(struct sockaddr *)&fromUser,&fromlen);
+			socklen_t fromlen = sizeof(struct sockaddr_in);
+			int recvlen = recvfrom(srv_sock,(char *)readBuffer,READBUFFER_SIZE, 0,(struct sockaddr *)&fromUser,&fromlen);
 
 			strncpy(an_ip, inet_ntoa(fromUser.sin_addr),IP_SIZE);
 			an_ip[IP_SIZE] = '\0';
-			a_user_ptr = NULL;
+			struct a_user *a_user_ptr = NULL;
 
 			if ((recvlen == (CALL_SIZE + 1)) || (recvlen == (CALL_SIZE + 3))) {
 				readBuffer[(recvlen - 1)] = '\0';
@@ -2315,17 +2199,16 @@ void CXReflector::Run()
 								printf("Call %s mod %c drops the link\n", a_call, readBuffer[8]);
 
 								/* this is the the remote repeater band */
+								int k = 3;
 								if (readBuffer[8] == 'A')
 									k = 0;
 								else if (readBuffer[8] == 'B')
 									k = 1;
 								else if (readBuffer[8] == 'C')
 									k = 2;
-								else
-									k = 3;
 
 								/* for all the reflector modules, zero out the repeater band */
-								for (i = 0; i < 5; i++) {
+								for (int i=0; i<5; i++) {
 									/*** inform the remote XRF reflector: start ***/
 									if (a_user_ptr->is_xrf) {
 										if (a_user_ptr->rpt_mods[i][k] != '\0') {
@@ -2344,7 +2227,7 @@ void CXReflector::Run()
 											reply_to_xrf[9] = ' ';
 											reply_to_xrf[10] = '\0';
 
-											for (j = 0; j < 5; j++)
+											for (int j=0; j<5; j++)
 												sendto(srv_sock, reply_to_xrf, CALL_SIZE + 3, 0,(struct sockaddr *)&(a_user_ptr->sin), sizeof(struct sockaddr_in));
 										}
 									}
@@ -2357,8 +2240,9 @@ void CXReflector::Run()
 								print_links_file();
 
 								/* if this repeater has unlinked everything, disconnect it */
-								for (i = 0; i < 5; i++) {
-									for (k = 0; k < 4; k++) {
+								int i;
+								for (i=0; i<5; i++) {
+									for (int k=0; k<4; k++) {
 										if (a_user_ptr->rpt_mods[i][k] != '\0')
 											break;
 									}
@@ -2384,6 +2268,7 @@ void CXReflector::Run()
 								if ((readBuffer[9] == 'A') || (readBuffer[9] == 'B') || (readBuffer[9] == 'C') || (readBuffer[9] == 'D') || (readBuffer[9] == 'E')) {
 
 									/* local reflector module */
+									int i = 4;
 									if (readBuffer[9] == 'A')
 										i = 0;
 									else if (readBuffer[9] == 'B')
@@ -2392,20 +2277,17 @@ void CXReflector::Run()
 										i = 2;
 									else if (readBuffer[9] == 'D')
 										i = 3;
-									else
-										i = 4;
 
 									/* remote repeater band */
+									int k = 3;
 									if (readBuffer[8] == 'A')
 										k = 0;
 									else if (readBuffer[8] == 'B')
 										k = 1;
 									else if (readBuffer[8] == 'C')
 										k = 2;
-									else
-										k = 3;
 
-									for (j = 0; j < 5; j++) {
+									for (int j=0; j<5; j++) {
 										if (i == j) {
 											/*** inform the remote XRF reflector: start ***/
 											if (a_user_ptr->is_xrf) {
@@ -2414,7 +2296,7 @@ void CXReflector::Run()
 													reply_to_xrf[8] = readBuffer[9];
 													reply_to_xrf[9] = readBuffer[8];
 													reply_to_xrf[10] = '\0';
-													for (n = 0; n < 5; n++)
+													for (int n=0; n<5; n++)
 														sendto(srv_sock, reply_to_xrf, CALL_SIZE + 3, 0, (struct sockaddr *)&(a_user_ptr->sin), sizeof(struct sockaddr_in));
 												}
 											}
@@ -2441,7 +2323,7 @@ void CXReflector::Run()
 						}
 					}
 				} else {
-					allowed_to_connect = true;
+					bool allowed_to_connect = true;
 					// printf("Possible new connection: %.*s ip=%s\n",  recvlen - 1, readBuffer, an_ip);
 
 					do {
@@ -2459,7 +2341,7 @@ void CXReflector::Run()
 						}
 
 						/* Is this callsign blocked? */
-						block_pos = blocks.find(a_call);
+						auto block_pos = blocks.find(a_call);
 						if (block_pos != blocks.end()) {
 							// printf("Callsign is blocked\n");
 							allowed_to_connect = false;
@@ -2468,7 +2350,7 @@ void CXReflector::Run()
 
 						/* if it is XRF, do we want to accept it? */
 						if (memcmp(a_call, "XRF", 3) == 0) {
-							pos = call_ip_map.find(a_call);
+							auto pos = call_ip_map.find(a_call);
 							if (pos == call_ip_map.end()) {
 								allowed_to_connect = false;
 								break;
@@ -2479,7 +2361,7 @@ void CXReflector::Run()
 
 					if (allowed_to_connect) {
 						/* do we have a repeater in the database? */
-						call_valid = regexec(&preg, a_call, 0, NULL, 0);
+						int call_valid = regexec(&preg, a_call, 0, NULL, 0);
 
 						if (recvlen == (CALL_SIZE + 3)) {
 							if ((call_valid != REG_NOERROR) && (memcmp(a_call, "XRF", 3) != 0)) {
@@ -2518,8 +2400,8 @@ void CXReflector::Run()
 							/* w1bsb: a_user_ptr->sin.sin_port = htons(LISTEN_PORT); */
 
 							/* Initialize links */
-							for (i = 0; i < 5; i++) {
-								for (k = 0; k < 4; k++) {
+							for (int i=0; i<5; i++) {
+								for (int k=0; k<4; k++) {
 									a_user_ptr->rpt_mods[i][k] = '\0';
 									a_user_ptr->link_time[i][k] = 0;
 								}
@@ -2534,6 +2416,7 @@ void CXReflector::Run()
 								*/
 
 								/* local reflector module */
+								int i = 4;
 								if (readBuffer[9] == 'A')
 									i = 0;
 								else if (readBuffer[9] == 'B')
@@ -2542,18 +2425,15 @@ void CXReflector::Run()
 									i = 2;
 								else if (readBuffer[9] == 'D')
 									i = 3;
-								else
-									i = 4;
 
 								/* remote repeater band */
+								int k = 3;
 								if (readBuffer[8] == 'A')
 									k = 0;
 								else if (readBuffer[8] == 'B')
 									k = 1;
 								else if (readBuffer[8] == 'C')
 									k = 2;
-								else
-									k = 3;
 
 								a_user_ptr->rpt_mods[i][k] = readBuffer[8];
 								time(&a_user_ptr->link_time[i][k]);
@@ -2561,7 +2441,7 @@ void CXReflector::Run()
 							}
 
 							/* Add new user to the connected list */
-							user_insert_pair = a_user_list.insert(pair<string, struct a_user *>(an_ip, a_user_ptr));
+							auto user_insert_pair = a_user_list.insert(std::pair<std::string, struct a_user *>(an_ip, a_user_ptr));
 							if (user_insert_pair.second) {
 								printf("new CALL=%s,REPEATER,ip=%s,users=%ld, link from remote mod %c ---> local mod %c\n",
 									   a_call, an_ip, a_user_list.size() + inbound_list.size(), readBuffer[8], readBuffer[9]);
@@ -2577,7 +2457,7 @@ void CXReflector::Run()
 									reply_to_xrf[8] = readBuffer[9];
 									reply_to_xrf[9] = readBuffer[8];
 									reply_to_xrf[10] = '\0';
-									for (n = 0; n < 5; n++)
+									for (int n=0; n<5; n++)
 										sendto(srv_sock, reply_to_xrf, CALL_SIZE + 3, 0, (struct sockaddr *)&(a_user_ptr->sin), sizeof(struct sockaddr_in));
 									/*** inform the remote XRF reflector: end ***/
 								}
@@ -2620,7 +2500,7 @@ void CXReflector::Run()
 					}
 				}
 			} else if ((recvlen == 56) || (recvlen == 27)) {
-				found = false;
+				bool found = false;
 
 				auto user_pos = a_user_list.find(an_ip);
 				if (user_pos != a_user_list.end()) {
@@ -2634,7 +2514,7 @@ void CXReflector::Run()
 						memcpy(a_call, readBuffer + 42, CALL_SIZE);
 						a_call[CALL_SIZE] = '\0';
 
-						call_valid = regexec(&preg, a_call, 0, NULL, 0);
+						int call_valid = regexec(&preg, a_call, 0, NULL, 0);
 						if (call_valid != REG_NOERROR) {
 							printf("User callsign [%s] not valid, audio from [%s] will not be transmitted\n", a_call, an_ip);
 							found = false;
@@ -2654,6 +2534,7 @@ void CXReflector::Run()
 							if (a_user_ptr->is_xrf) {
 								/* a remote reflector sends its own data */
 								/* remote band of reflector */
+								int k = -1;
 								if (readBuffer[25] == 'A')
 									k = 0;
 								else if (readBuffer[25] == 'B')
@@ -2662,12 +2543,10 @@ void CXReflector::Run()
 									k = 2;
 								else if (readBuffer[25] == 'D')
 									k = 3;
-								else
-									k = -1;
 
 								if (k >= 0) {
 									// find our local module
-									for (i = 0; i < 5; i++) {
+									for (int i=0; i<5; i++) {
 										if (a_user_ptr->rpt_mods[i][k] == readBuffer[25]) {
 											source_mod = readBuffer[25];  // band of remote reflector
 
@@ -2708,6 +2587,7 @@ void CXReflector::Run()
 									/* repeater is not using g2_link, try this */
 
 									/* byte 25 is our reflector mod */
+									int i = -1;
 									if (readBuffer[25] == 'A')
 										i = 0;
 									else if (readBuffer[25] == 'B')
@@ -2718,12 +2598,10 @@ void CXReflector::Run()
 										i = 3;
 									else if (readBuffer[25] == 'E')
 										i = 4;
-									else
-										i = -1;
 
 									/* now find the first band of the remote repeater linked to our reflector mod */
 									if (i >= 0) {
-										for (k = 0; k < 4; k++) {
+										for (int k=0; k<4; k++) {
 											if (a_user_ptr->rpt_mods[i][k] != '\0') {
 												source_mod = a_user_ptr->rpt_mods[i][k];  /* we found it */
 
@@ -2779,7 +2657,7 @@ void CXReflector::Run()
 						}
 						/* Limit?, delete oldest user */
 						if (dt_lh_list.size() == LH_MAX_SIZE) {
-							dt_lh_pos = dt_lh_list.begin();
+							auto dt_lh_pos = dt_lh_list.begin();
 							dt_lh_list.erase(dt_lh_pos);
 						}
 						time(&tNow);
@@ -2801,7 +2679,7 @@ void CXReflector::Run()
 										memcpy(an_rcd->data[0], readBuffer, recvlen);
 										an_rcd->recvlen = recvlen;
 										an_rcd->idx = 1;
-										rcd_insert_pair = rcd_list.insert(pair<string, struct rcd *>(an_rcd_streamid, an_rcd));
+										auto rcd_insert_pair = rcd_list.insert(std::pair<std::string, struct rcd *>(an_rcd_streamid, an_rcd));
 										if (rcd_insert_pair.second)
 											; // printf("Started recording for user %.8s, streamid=%d,%d\n",
 										//         readBuffer + 42, readBuffer[12], readBuffer[13]);
@@ -2835,11 +2713,11 @@ void CXReflector::Run()
 
 								/*** start playback */
 								an_rcd->locked = true;
-								pthread_attr_init(&attr);
-								pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-								rc = pthread_create(&playback_thread,&attr,playback,(void *)rcd_pos->second);
-								if (rc != 0) {
+								try {
+									std::async(std::launch::async, &CXReflector::playback, this, an_rcd);
+								} catch(const std::exception &e) {
 									printf("Failed to start the playback thread for streamid=%d,%d\n", readBuffer[12], readBuffer[13]);
+									printf("Exception: %s\n", e.what());
 									free(rcd_pos->second);
 									rcd_pos->second = NULL;
 									rcd_list.erase(rcd_pos);
@@ -2857,11 +2735,11 @@ void CXReflector::Run()
 
 					/* At this point, if this is a header, it contains our reflector info */
 					/* save the header for re-transmit */
+					int i = -1;
 					if (recvlen == 56) {
 						/* save it */
 						source_mod = refbuf[27];
 
-						i = -1;
 						if (refbuf[27] == 'A')
 							i = 0;
 						else if (refbuf[27] == 'B')
@@ -2938,6 +2816,7 @@ void CXReflector::Run()
 					if (rcd_list.find(an_rcd_streamid) == rcd_list.end()) {
 						/****************************** REPLACEMENT to send_a_pkt_to_all ****************************************************/
 						if (recvlen == 56) {
+							int k = -1;
 							if (readBuffer[25] == 'A')
 								k = 0;
 							else if (readBuffer[25] == 'B')
@@ -2946,17 +2825,15 @@ void CXReflector::Run()
 								k = 2;
 							else if (readBuffer[25] == 'D')
 								k = 3;
-							else
-								k = -1;
 
 							if (k >= 0) {
 								temp_x[k].old_sid[0] = readBuffer[12];
 								temp_x[k].old_sid[1] = readBuffer[13];
 
 								streamid_raw = (readBuffer[12] * 256U) + readBuffer[13];
-								streamid_raw ++;
+								streamid_raw++;
 								if (streamid_raw == 0)
-									streamid_raw ++;
+									streamid_raw++;
 
 								memcpy(temp_x[k].hdr, readBuffer, 56);
 								temp_x[k].hdr[12] = streamid_raw / 256U;
@@ -3025,15 +2902,12 @@ void CXReflector::Run()
 	}
 }
 
-void CXReflector::playback(void *arg)
+void CXReflector::playback(struct rcd *temp_rcd)
 {
-	struct rcd *temp_rcd = (struct rcd *)arg;
 	struct sigaction act;
-	unsigned short int j;
-	unsigned short int i;
 	struct timespec nanos;
 
-	act.sa_handler = sigCatch;
+	act.sa_handler = &CXReflector::sigCatch;
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = SA_RESTART;
 	if (sigaction(SIGTERM, &act, 0) != 0) {
@@ -3058,16 +2932,16 @@ void CXReflector::playback(void *arg)
 	/* first packet is header */
 
 	/*** MUST CHANGE rpt1 and rpt2 if temp_rcd->recvlen is 58 ***/
-	for (j = 0; j < 5; j++)
+	for (int j=0; j<5; j++)
 		sendto(ref_sock, (char *)temp_rcd->data[0], temp_rcd->recvlen, 0, (struct sockaddr *)&(temp_rcd->sin), sizeof(struct sockaddr_in));
 
 	/*** header sent ***/
-	i = 1;
+	int i = 1;
 
 	while ((keep_running) && (i < temp_rcd->idx)) {
 		time(&(temp_rcd->ts));
-		sendto(ref_sock, (char *)temp_rcd->data[i], (temp_rcd->recvlen == 56)?27:29, /*** ? 32 ***/ 0, (struct sockaddr *)&(temp_rcd->sin), sizeof(struct sockaddr_in));
-		i ++;
+		sendto(ref_sock, (char *)temp_rcd->data[i], (temp_rcd->recvlen == 56) ? 27 : 29, /*** ? 32 ***/ 0, (struct sockaddr *)&(temp_rcd->sin), sizeof(struct sockaddr_in));
+		i++;
 		nanos.tv_sec = 0;
 		nanos.tv_nsec = 17000000;
 		nanosleep(&nanos,0);
@@ -3086,7 +2960,6 @@ void CXReflector::playback(void *arg)
 bool CXReflector::Initialize(int argc, char **argv)
 {
 	struct sigaction act;
-	inbound *inbound_ptr;
 	short int i;
 
 	if (argc != 2) {
@@ -3103,7 +2976,7 @@ bool CXReflector::Initialize(int argc, char **argv)
 
 	tzset();
 
-	act.sa_handler = sigCatch;
+	act.sa_handler = &CXReflector::sigCatch;
 	sigemptyset(&act.sa_mask);
 	act.sa_flags = SA_RESTART;
 	if (sigaction(SIGTERM, &act, 0) != 0) {
@@ -3186,7 +3059,7 @@ void CXReflector::Stop()
 		refbuf[3] = 0;
 		refbuf[4] = 0;
 		for (auto inbound_pos = inbound_list.begin(); inbound_pos != inbound_list.end(); inbound_pos++) {
-			inbound *input *inbound_ptr = (inbound *)inbound_pos->second;
+			inbound *inbound_ptr = (inbound *)inbound_pos->second;
 			sendto(ref_sock, (char *)refbuf, 5, 0, (struct sockaddr *)&(inbound_ptr->sin), sizeof(struct sockaddr_in));
 		}
 		inbound_list.clear();
